@@ -1,1 +1,1 @@
-# p8106_hw2_ly2565
+This is the repository for p8106 hw2.
