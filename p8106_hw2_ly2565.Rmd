@@ -4,8 +4,6 @@ author: "Lin Yang"
 output: github_document
 --- 
 
-
-
   
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
@@ -18,6 +16,7 @@ library(mgcv)
 library(pdp)
 library(earth)
 library(tidyverse)
+library(glmnet)
 ```
 
 ## Partition the dataset into training data and test data
@@ -49,8 +48,11 @@ theme1$strip.background$col <- rgb(.0, .2, .6, .2)
 trellis.par.set(theme1)
 
 #scatterplots of outstate vs predictors
-featurePlot(x_train, y_train, plot = "scatter", labels = c("","Y"),
-            type = c("p"), layout = c(4, 4))
+featurePlot(x_train, y_train, 
+            plot = "scatter", 
+            labels = c("","Outstate"),
+            type = c("p"), 
+            layout = c(4, 4))
 
 #correlation plot of preditors
 corrplot::corrplot(cor(x_train), 
@@ -59,27 +61,158 @@ corrplot::corrplot(cor(x_train),
          tl.cex = 0.5)
 ```
 
-Based on the scatter plots of response vs predictors, we can see that there are obvious linear relationship between the response `outstate` and predictors, `top25perc`, `room_board`, `top10perc`, `ph_d`, `terminal`, `grad_rate`, and `expend`. And according to the correlation plot, some variables are correlated, such as `apps` and `accept`, `enroll` and `f_undergrad`.
+Based on the scatter plots of Outstate vs predictors, we can see that there are possible linear relationships between the response `outstate` and predictors, `top25perc`, `room_board`, `top10perc`, and `expend`. And according to the correlation plot, some variables are highly correlated, such as `apps` and `accept`, `enroll` and `f_undergrad`, `top25perc` and `top10perc`.
 
 
 ## Fit smoothing spline models using Terminal only
-```{r}
+```{r, dpi = 300}
 fit.ss <- smooth.spline(College_train$terminal, College_train$outstate)
+#degree of freedom
 fit.ss$df
 
-terminal.grid <- seq(from = 20, to = 100, by = 1)
+#range of terminal values
+range(College_train$terminal)
+#grid of terminal values
+terminal.grid <- seq(from = 24, to = 100, by = 1)
+#predictions on grid of terminal values
 pred.ss <- predict(fit.ss, x = terminal.grid)
 
 pred.ss.df <- data.frame(pred = pred.ss$y, terminal = terminal.grid)
 
-p <- ggplot(data = College_test, aes(x = terminal, y = outstate)) +
+p <- ggplot(data = College_train, aes(x = terminal, y = outstate)) +
      geom_point(color = rgb(.2, .4, .2, .5))
 
 p + geom_line(aes(x = terminal, y = pred), data = pred.ss.df, color = rgb(.8, .1, .1, 1)) + theme_bw()
 ```
 
+The degree of freedom obtained by generalized cross-validation is `r fit.ss$df`. The plot of the smoothing spline model with optimized GCV df seems to fit the data well. It follows the data trend without under or over fitting. We then fit smoothing spline models with a range of degrees of freedom.
+
+```{r, dpi = 300}
+#a smoothing spline function of df
+ss <- function(df) {
+  fit.ss <- smooth.spline(College_train$terminal, College_train$outstate, df = df)
+  pred.ss <- predict(fit.ss, x = terminal.grid)
+  pred.ss.df <- data.frame(pred = pred.ss$y, terminal = terminal.grid, df = df)
+  return(pred.ss.df)
+}
+
+#create a list to store for loop results
+ss_list <- list()
+
+for (i in 2:20) {
+  res <- ss(i)
+  ss_list[[i]] <- res
+}
+
+#convert the result list to a data frame
+res_df <- bind_rows(ss_list, .id = "list_label") %>% 
+          as.data.frame() %>% 
+          select(-1)
+
+p + geom_line(aes(x = terminal, y = pred, group = df, color = df), 
+              data = res_df) + 
+  theme_bw()
+```
+
+The plot of smoothing spline models with varying degrees of freedom shows that the model with larger df are more flexible. The linear curve should have the smallest df. Other darker curves represent slightly flexible models with small df. The light blue curve with highest df seems quite flexible across data points.
 
 
+## GAM 
+```{r}
+ctrl <- trainControl(method = "cv", number = 10)
+set.seed(2022)
+fit.gam <- train(x_train, y_train,
+                 method = "gam",
+                 tuneGrid = data.frame(method = "GCV.Cp", select = c(TRUE,FALSE)),
+                 trControl = ctrl)
+
+fit.gam$bestTune
+fit.gam$finalModel
+
+#plot of final model
+par(mar=c(1,1,1,1))
+par(mfrow = c(4, 4))
+plot(fit.gam$finalModel)
+
+#test error
+gam_test_mse <- mean((y_test - predict(fit.gam, x_test))^2)
+gam_test_mse
+```
+
+According to the final GAM model, all predictors are shown to be nonlinear since they all have `s()` in the model. However, predictors `terminal`, `personal`, `p_undergrad`, `enroll`, and `apps` have estimated degree of freedom of 1, meaning these predictors have linear relationship with the outcome. Other predictors have estimated degrees of freedom greater than 1, indicating their nonlinear relationship with the outcome. This can be explained by the fact that in caret, variables with more than 10 unique values are considered for nonlinearity, whereas variables with less than 10 unique values are forced to be linear. In this dataset, all variables have more than 10 unique values. We also calculate the test MSE of this GAM model to be `r gam_test_mse`.
+
+## MARS
+```{r}
+#tuning parameter grid
+mars_grid <- expand.grid(degree = 1:3,
+                         nprune = 2:25)
+
+set.seed(2022)
+fit.mars <- train(x_train, y_train,
+                  method = "earth",
+                  tuneGrid = mars_grid,
+                  trControl = ctrl)
+
+ggplot(fit.mars)
+fit.mars$bestTune
+coef(fit.mars$finalModel)
+
+#test error
+mars_test_mse <- mean((y_test - predict(fit.mars, x_test))^2)
+mars_test_mse
+```
+
+The plot of RMSE vs # of terms shows that product degree of 1 and 11 terms achieve the lowest RMSE, which is the same as the results of the fit's bestTune. The coefficients of the final model is shown above. Note that the numbers along with variable names are the location of knots. The test MSE of the final MARS model is calculated to be `r mars_test_mse`.
 
 
+To further understand the relationship between 2 particular variables `enroll` and `grad_rate`, we create partial dependence plots for each variable individually and an interaction PDP. 
+```{r, warning = FALSE}
+p1 <- pdp::partial(fit.mars, 
+                   pred.var = c("enroll"), 
+                   grid.resolution = 10) %>% autoplot()
+
+p2 <- pdp::partial(fit.mars, 
+                   pred.var = c("grad_rate"), 
+                   grid.resolution = 10) %>% autoplot()
+
+p3 <- pdp::partial(fit.mars, 
+                   pred.var = c("enroll", "grad_rate"), 
+                   grid.resolution = 10) %>%
+      pdp::plotPartial(levelplot = FALSE, zlab = "yhat", drape = TRUE, 
+                       screen = list(z = 20, x = -60))
+
+grid.arrange(p1, p2, p3, ncol = 2)
+```
+
+From the partial dependence plots, we see that variable `enroll` has a knot around 1000, and `grad_rate` has a knot at 83, which corresponds to coefficient summary above. For `enroll`, an unit increase in enroll will cause a less sharp decrease in `outstate` if a college exceeds 1000 on enroll. For `grad_rate`, when a college exceeds 83 on grad_rate, the response variable will remain the same. And a hinged surface of `enroll` and `grad_rate` is shown above. 
+
+## Compare MARS model to linear model
+```{r}
+#lasso
+set.seed(2022)
+
+fit.lasso <- train(x_train, y_train,
+                   method = "glmnet",
+                   tuneGrid = expand.grid(alpha = 1, 
+                                          lambda = exp(seq(5, -1, length = 100))),
+                   trControl = ctrl,
+                   preProcess = c("center", "scale"))
+plot(fit.lasso, xTrans = log, col = 4)
+
+fit.lasso$bestTune
+coef(fit.lasso$finalModel, fit.lasso$bestTune$lambda)
+```
+
+The best tuning parameter lambda of this lasso model is `r fit.lasso$bestTune$lambda`. From the coefficients above, we can see that predictors `apps`, `top25perc`, and `books` are removed. 
+
+
+We then compare MARS and LASSO models using cross-validation RMSE to determine which model does a better job in predicting the response variable. 
+```{r}
+set.seed(2022)
+resamp <- resamples(list(mars = fit.mars, lasso = fit.lasso))
+summary(resamp)
+bwplot(resamp, metric = "RMSE")
+```
+
+Based on the boxplots, we prefer the MARS model because it has lower median and mean cross-validation RMSE, suggesting that the MARS model does better in predictions. 
 
