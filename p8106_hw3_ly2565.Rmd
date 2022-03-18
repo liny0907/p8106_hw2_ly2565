@@ -1,0 +1,105 @@
+---
+title: "P8106 HW3"
+author: "Lin Yang"
+output: github_document
+--- 
+
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r, echo = T, message = FALSE, results='hide', warning=FALSE}
+library(tidyverse)
+library(caret)
+library(glmnet)
+library(mlbench)
+library(pROC)
+library(pdp)
+library(vip)
+library(AppliedPredictiveModeling)
+```
+
+## Partition the dataset into training data and test data
+```{r}
+auto <- read.csv("data/auto.csv") %>% 
+  janitor::clean_names() %>% 
+  na.omit() %>% 
+  mutate(mpg_cat = factor(mpg_cat, levels = c("low", "high")))
+
+set.seed(2022)
+trainRows <- createDataPartition(y = auto$mpg_cat, p = 0.7, list = FALSE)
+auto_train <- auto[trainRows, ]
+auto_test <- auto[-trainRows, ]
+```
+
+## EDA
+The numeric summary of all variables is shown below. This auto dataset contains `r nrow(auto)` observations of `r ncol(auto)` variables. The response variable is `mpg_cat` and predictors are `r names(auto[1:7])`.
+```{r}
+summary(auto)
+```
+
+```{r, dpi = 300}
+theme1 <- transparentTheme(trans = .4) #transparent level
+trellis.par.set(theme1)
+
+featurePlot(x = auto[, 1:7], 
+            y = auto$mpg_cat,
+            scales = list(x = list(relation = "free"), 
+                          y = list(relation = "free")),
+            plot = "density", pch = "|", 
+            auto.key = list(columns = 2))
+
+#correlation plot of predictors
+corrplot::corrplot(cor(auto[, 1:7]), 
+         method = "circle", 
+         type = "full",
+         tl.cex = 0.8)
+```
+
+Based on the density plot of response vs. predictors, some predictors have quite different density plots, such as `year`, `cylinders`, `displacement`, `horsepower`, and `weight`. This means these predictors are more informative in making predictions of response variable. For example, cars with larger weights tend to have low gas mileage. From the correlation plot, we can see that some variables are highly correlated. For example, `weight` is positively correlated with `displacement`, and `acceleration` is negatively correlated with `horsepower`. 
+
+## Logistic regression
+```{r}
+contrasts(auto$mpg_cat)
+
+fit.glm <- glm(mpg_cat ~ ., 
+               data = auto, 
+               subset = trainRows, 
+               family = binomial(link = "logit"))
+summary(fit.glm)
+vip(fit.glm)
+```
+
+According to the variable importance plot, `year` and `weight` have the largest variable importance scores, which corresponds to their smallest p-values in the model summary. They both have p-values less than 0.05, indicating that they are statistically significant predictors. Also, the decreasing order of variable importance scores matches the increasing order of p-values. 
+
+
+```{r}
+test.pred.prob <- predict(fit.glm, 
+                          newdata = auto_test,
+                          type = "response")
+test.pred <- rep("low", length(test.pred.prob))
+#consider a simple classifier with a cut-off of 0.5 here
+test.pred[test.pred.prob > 0.5] <- "high"
+
+confusionMatrix(data = factor(test.pred, levels = c("low", "high")),
+                reference = auto_test$mpg_cat,
+                positive = "high")
+```
+
+When using the logistic regression model to make predictions on the test data, the confusion matrix suggests that the overall prediction accuracy is 0.8621 with a 95% CI of (0.7857, 0.9191). The no information rate is 0.5, meaning if we have no information and predict all observations to either low or high class, the accuracy would be 50%. The extremely small p value suggests that the accuracy is significantly better than the no information rate. The kappa is 0.7241, greater than 0.6, meaning our classifier performs better as compared to how well it would have performed simply by chance. The sensitivity and specificity of this model are 0.8793 and 0.8448 which are both quite high. PPV (0.85) and NPV (0.875) are also good.  
+
+We then use `caret` to fit a logistic regression model and to compare the cv performance with other models.
+```{r}
+ctrl <- trainControl(method = "repeatedcv",
+                     summaryFunction = twoClassSummary,
+                     classProbs = TRUE)
+set.seed(2022)
+model.glm <- train(x = auto_train[1:7],
+                   y = auto_train$mpg_cat,
+                   method = "glm",
+                   metric = "ROC",
+                   trControl = ctrl)
+```
+
+
