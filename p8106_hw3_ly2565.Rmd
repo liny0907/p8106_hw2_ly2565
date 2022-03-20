@@ -15,6 +15,7 @@ library(caret)
 library(glmnet)
 library(mlbench)
 library(pROC)
+library(klaR)
 library(pdp)
 library(vip)
 library(AppliedPredictiveModeling)
@@ -40,7 +41,7 @@ summary(auto)
 ```
 
 ```{r, dpi = 300}
-theme1 <- transparentTheme(trans = .4) #transparent level
+theme1 <- transparentTheme(trans = .4)
 trellis.par.set(theme1)
 
 featurePlot(x = auto[, 1:7], 
@@ -49,7 +50,21 @@ featurePlot(x = auto[, 1:7],
                           y = list(relation = "free")),
             plot = "density", pch = "|", 
             auto.key = list(columns = 2))
+```
 
+Based on the density plot of response vs. predictors, some predictors have quite different density plots, such as `year`, `cylinders`, `displacement`, `horsepower`, and `weight`. This means these predictors are more informative in making predictions of response variable. For example, cars with larger weights tend to have low gas mileage. 
+
+We then make a LDA based partition plot using continuous variables that are informative according to the density plot above. 
+```{r, dpi = 300}
+partimat(mpg_cat ~ displacement + horsepower + weight, 
+         data = auto, 
+         subset = trainRows,
+         method = "lda")
+```
+
+The partition plots are based on every combination of two variables. `h` represents high gas mileage, `l` represents low mileage. The decision boundary is shown on each plot, and red data points represent misclassification. The combination of displacement and horsepower has the lowest error rate, 0.087.
+
+```{r, dpi = 300}
 #correlation plot of predictors
 corrplot::corrplot(cor(auto[, 1:7]), 
          method = "circle", 
@@ -57,7 +72,7 @@ corrplot::corrplot(cor(auto[, 1:7]),
          tl.cex = 0.8)
 ```
 
-Based on the density plot of response vs. predictors, some predictors have quite different density plots, such as `year`, `cylinders`, `displacement`, `horsepower`, and `weight`. This means these predictors are more informative in making predictions of response variable. For example, cars with larger weights tend to have low gas mileage. From the correlation plot, we can see that some variables are highly correlated. For example, `weight` is positively correlated with `displacement`, and `acceleration` is negatively correlated with `horsepower`. 
+From the correlation plot, we can see that some variables are highly correlated. For example, `weight` is positively correlated with `displacement`, and `acceleration` is negatively correlated with `horsepower`. 
 
 ## Logistic regression
 ```{r}
