@@ -18,6 +18,7 @@ library(pROC)
 library(klaR)
 library(pdp)
 library(vip)
+library(MASS)
 library(AppliedPredictiveModeling)
 ```
 
@@ -26,9 +27,12 @@ library(AppliedPredictiveModeling)
 auto <- read.csv("data/auto.csv") %>% 
   janitor::clean_names() %>% 
   na.omit() %>% 
-  mutate(mpg_cat = factor(mpg_cat, levels = c("low", "high")))
+  mutate(cylinders = as.factor(cylinders),
+         year = as.factor(year),
+         origin = as.factor(origin),
+         mpg_cat = factor(mpg_cat, levels = c("low", "high")))
 
-set.seed(2022)
+set.seed(1)
 trainRows <- createDataPartition(y = auto$mpg_cat, p = 0.7, list = FALSE)
 auto_train <- auto[trainRows, ]
 auto_test <- auto[-trainRows, ]
@@ -44,17 +48,19 @@ summary(auto)
 theme1 <- transparentTheme(trans = .4)
 trellis.par.set(theme1)
 
-featurePlot(x = auto[, 1:7], 
-            y = auto$mpg_cat,
+#feature plots of continuous variables
+auto_con <- auto %>% dplyr::select(displacement, horsepower, weight, acceleration, mpg_cat)
+featurePlot(x = auto_con[, 1:4], 
+            y = auto_con$mpg_cat,
             scales = list(x = list(relation = "free"), 
                           y = list(relation = "free")),
             plot = "density", pch = "|", 
             auto.key = list(columns = 2))
 ```
 
-Based on the density plot of response vs. predictors, some predictors have quite different density plots, such as `year`, `cylinders`, `displacement`, `horsepower`, and `weight`. This means these predictors are more informative in making predictions of response variable. For example, cars with larger weights tend to have low gas mileage. 
+Based on the density plot of response vs. continuous predictors, some predictors have quite different density plots, such as `displacement`, `horsepower`, and `weight`. This means these predictors are more informative in making predictions of response variable. For example, cars with larger weights tend to have low gas mileage. 
 
-We then make a LDA based partition plot using continuous variables that are informative according to the density plot above. 
+We then make a LDA-based partition plot using continuous variables that are informative according to the density plot above. 
 ```{r, dpi = 300}
 partimat(mpg_cat ~ displacement + horsepower + weight, 
          data = auto, 
@@ -62,11 +68,14 @@ partimat(mpg_cat ~ displacement + horsepower + weight,
          method = "lda")
 ```
 
-The partition plots are based on every combination of two variables. `h` represents high gas mileage, `l` represents low mileage. The decision boundary is shown on each plot, and red data points represent misclassification. The combination of displacement and horsepower has the lowest error rate, 0.087.
+The partition plots are based on every combination of two variables. `h` represents high gas mileage, `l` represents low mileage. The decision boundary is shown on each plot, and red data points represent mis-classification. The combination of displacement and horsepower has the lowest error rate, 0.087.
 
 ```{r, dpi = 300}
 #correlation plot of predictors
-corrplot::corrplot(cor(auto[, 1:7]), 
+auto1 <- read.csv("data/auto.csv") %>% 
+  janitor::clean_names() %>% 
+  na.omit()
+corrplot::corrplot(cor(auto1[1:7]), 
          method = "circle", 
          type = "full",
          tl.cex = 0.8)
@@ -86,7 +95,7 @@ summary(fit.glm)
 vip(fit.glm)
 ```
 
-According to the variable importance plot, `year` and `weight` have the largest variable importance scores, which corresponds to their smallest p-values in the model summary. They both have p-values less than 0.05, indicating that they are statistically significant predictors. Also, the decreasing order of variable importance scores matches the increasing order of p-values. 
+According to the variable importance plot, `weight`, `year81`, and `year79` have the largest variable importance scores, which corresponds to their smallest p-values in the model summary. Their p-values are less than 0.05, indicating that they are statistically significant predictor. Also, the decreasing order of variable importance scores matches the increasing order of p-values. 
 
 
 ```{r}
@@ -102,19 +111,96 @@ confusionMatrix(data = factor(test.pred, levels = c("low", "high")),
                 positive = "high")
 ```
 
-When using the logistic regression model to make predictions on the test data, the confusion matrix suggests that the overall prediction accuracy is 0.8621 with a 95% CI of (0.7857, 0.9191). The no information rate is 0.5, meaning if we have no information and predict all observations to either low or high class, the accuracy would be 50%. The extremely small p value suggests that the accuracy is significantly better than the no information rate. The kappa is 0.7241, greater than 0.6, meaning our classifier performs better as compared to how well it would have performed simply by chance. The sensitivity and specificity of this model are 0.8793 and 0.8448 which are both quite high. PPV (0.85) and NPV (0.875) are also good.  
+When using the logistic regression model to make predictions on the test data, the confusion matrix suggests that the overall prediction accuracy is 0.9052 with a 95% CI of (0.8367, 0.9517). The no information rate is 0.5, meaning if we have no information and predict all observations to either low or high class, the accuracy would be 50%. The extremely small p value suggests that the accuracy is significantly better than the no information rate. The kappa is 0.8103, greater than 0.8, meaning our classifier performs better as compared to how well it would have performed simply by chance. The sensitivity and specificity of this model are 0.9483 and 0.8621 which are both quite high. PPV (0.873) and NPV (0.9434) are also good.  
 
 We then use `caret` to fit a logistic regression model and to compare the cv performance with other models.
 ```{r}
 ctrl <- trainControl(method = "repeatedcv",
+                     repeats = 5,
                      summaryFunction = twoClassSummary,
                      classProbs = TRUE)
-set.seed(2022)
+set.seed(1)
 model.glm <- train(x = auto_train[1:7],
                    y = auto_train$mpg_cat,
                    method = "glm",
                    metric = "ROC",
                    trControl = ctrl)
+```
+
+## MARS
+```{r}
+set.seed(1)
+model.mars <- train(x = auto_train[1:7],
+                    y = auto_train$mpg_cat,
+                    method = "earth",
+                    tuneGrid = expand.grid(degree = 1:3, 
+                                           nprune = 2:20),
+                    metric = "ROC",
+                    trControl = ctrl)
+
+plot(model.mars)
+model.mars$bestTune
+
+coef(model.mars$finalModel) 
+```
+
+
+
+## LDA
+```{r}
+fit.lda <- lda(mpg_cat~., 
+               data = auto,
+               subset = trainRows)
+
+plot(fit.lda)
+mean(predict(fit.lda)$x)
+
+lda.pred <- predict(fit.lda, newdata = auto_test)
+head(lda.pred$posterior)
+```
+
+The average LD1 is almost 0, indicating that linear discriminant variables have been centered. The histograms of transformed x shows that data points with negative transformed x values tend to be classified into the low group, on the other hand, data points with positive x values tend to be classified into the high group. The decision boundary is approximately at x = 0. 
+
+
+```{r}
+set.seed(1)
+model.lda <- train(mpg_cat ~ .,
+                   data = auto_train,
+                   method = "lda",
+                   metric = "ROC",
+                   trControl = ctrl)
+```
+
+## Model comparison
+```{r}
+res <- resamples(list(glm = model.glm, mars = model.mars, lda = model.lda))
+summary(res)
+bwplot(res, metric = "ROC")
+```
+
+Based on the ROC summary and boxplots, the LDA model has the highest AUC, thus it is used to predict the response variable. We then plot its ROC curve using the test data, the AUC is 0.955 and misclassification error rate is 1 - 0.8966 = 10.34%. 
+
+
+```{r}
+lda.pred <- predict(model.lda, newdata = auto_test, type = "prob")[,2]
+roc.lda <- roc(auto_test$mpg_cat, lda.pred)
+auc <- roc.lda$auc[1]
+auc
+plot(roc.lda, legacy.axes = TRUE)
+legend("bottomright", legend = paste0("lda", ": ", round(auc, 3)), cex = 1)
+```
+
+```{r}
+lda.pred.prob <- predict(model.lda,
+                         newdata = auto_test,
+                         type = "prob")
+lda.pred <- rep("low", nrow(lda.pred.prob))
+#consider a simple classifier with a cut-off of 0.5 here
+lda.pred[lda.pred.prob[2] > 0.5] <- "high"
+
+confusionMatrix(data = factor(lda.pred, levels = c("low", "high")),
+                reference = auto_test$mpg_cat,
+                positive = "high")
 ```
 
 
