@@ -1,7 +1,7 @@
 ---
-title: "P8106 HW4"
+title: "P8106 HW5"
 author: "Lin Yang"
-output: pdf_document
+output: github_document
 --- 
 
   
@@ -12,109 +12,7 @@ knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 ```{r, echo = T, message = FALSE, results='hide', warning=FALSE}
 library(tidyverse)
 library(caret)
-library(mlbench)
-library(caret)
-library(rpart)
-library(rpart.plot)
-library(party)
-library(partykit)
-library(pROC)
-library(randomForest)
-library(ranger)
-library(gbm)
-library(pdp)
 ```
 
-## Problem 1
-
-```{r}
-College <- read.csv("data/College.csv") %>% 
-  janitor::clean_names() %>% 
-  select(-1)
-
-
-set.seed(2022)
-trainRows <- createDataPartition(y = College$outstate, p = 0.8, list = FALSE)
-College_train <- College[trainRows, ]
-College_test <- College[-trainRows, ]
-
-summary(College)
-```
-
-### a. Regression Tree
-
-```{r}
-ctrl <- trainControl(method = "cv")
-set.seed(2022)
-r.tree <- train(outstate ~ . ,
-                College_train,
-                method = "rpart",
-                tuneGrid = data.frame(cp = exp(seq(-6,-4, length = 50))),
-                trControl = ctrl)
-r.tree$bestTune
-ggplot(r.tree, highlight = TRUE)
-rpart.plot(r.tree$finalModel)
-```
-The best cp is selected to be `r r.tree$bestTune`. The root node is **expend** less than 11000 or not. There are 17 terminal nodes, thus this is a fairly large tree.
-
-### b. Random Forest
-
-```{r}
-rf.grid <- expand.grid(mtry = 1:16,
-                       splitrule = "variance",
-                       min.node.size = 1:6)
-set.seed(2022)
-rf.fit <- train(outstate ~ . ,
-                College_train, 
-                method = "ranger",
-                tuneGrid = rf.grid,
-                trControl = ctrl)
-rf.fit$bestTune
-ggplot(rf.fit, highlight = TRUE)
-
-pred.rf <- predict(rf.fit, newdata = College_test)
-test_error <- RMSE(pred.rf, College_test$outstate)
-test_error
-```
-
-The best tuning parameters are found to be m = 12 and minimum node size = 2. The test error is `r test_error`.
-
-
-```{r}
-set.seed(2022)
-rf.per <- ranger(outstate ~ . ,
-                 College_train,
-                 mtry = rf.fit$bestTune[[1]],
-                 splitrule = "variance",
-                 min.node.size = rf.fit$bestTune[[3]],
-                 importance = "permutation",
-                 scale.permutation.importance = TRUE) 
-
-barplot(sort(ranger::importance(rf.per), decreasing = FALSE), 
-        las = 2, horiz = TRUE, cex.names = 0.6,
-        col = colorRampPalette(colors = c("cyan","blue"))(16))
-```
-
-The variable importance plot is based on permutation importance. The most important variables are found to be `expend` and `room_board`. `accept`, `apps`, `grad_rate`, and `perc_alumni` are relatively important. 
-
-
-### c. Boosting
-
-```{r}
-gbm.grid <- expand.grid(n.trees = c(2000,3000,4000,5000),
-                        interaction.depth = 1:5,
-                        shrinkage = c(0.001,0.003,0.005),
-                        n.minobsinnode = c(1,10))
-
-set.seed(2022)
-gbm.fit <- train(outstate ~ . ,
-                 College_train, 
-                 method = "gbm",
-                 tuneGrid = gbm.grid,
-                 trControl = ctrl,
-                 verbose = FALSE)
-
-ggplot(gbm.fit, highlight = TRUE)
-```
 
 

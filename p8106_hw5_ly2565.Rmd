@@ -1,0 +1,205 @@
+---
+title: "P8106 HW4"
+author: "Lin Yang"
+output: pdf_document
+--- 
+
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r, echo = T, message = FALSE, results='hide', warning=FALSE}
+library(tidyverse)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(ranger)
+library(gbm)
+library(ISLR)
+```
+
+## Problem 1
+
+```{r}
+College <- read.csv("data/College.csv") %>% 
+  janitor::clean_names() %>% 
+  select(-1)
+
+set.seed(2022)
+trainRows <- createDataPartition(y = College$outstate, p = 0.8, list = FALSE)
+College_train <- College[trainRows, ]
+College_test <- College[-trainRows, ]
+```
+
+### a. Regression Tree
+
+```{r, dpi = 300}
+ctrl <- trainControl(method = "cv")
+set.seed(2022)
+r.tree <- train(outstate ~ . ,
+                College_train,
+                method = "rpart",
+                tuneGrid = data.frame(cp = exp(seq(-6,-4, length = 50))),
+                trControl = ctrl)
+r.tree$bestTune
+ggplot(r.tree, highlight = TRUE)
+rpart.plot(r.tree$finalModel)
+```
+The best cp is selected to be `r r.tree$bestTune`. The root node is `expend` less than 11000 or not. There are 17 terminal nodes, thus this is a large tree.
+
+### b. Random Forest
+
+```{r, dpi = 300}
+rf.grid <- expand.grid(mtry = 1:16,
+                       splitrule = "variance",
+                       min.node.size = 1:6)
+set.seed(2022)
+rf.fit <- train(outstate ~ . ,
+                College_train, 
+                method = "ranger",
+                tuneGrid = rf.grid,
+                trControl = ctrl)
+rf.fit$bestTune
+ggplot(rf.fit, highlight = TRUE)
+
+pred.rf <- predict(rf.fit, newdata = College_test)
+te.rf <- RMSE(pred.rf, College_test$outstate)
+te.rf
+```
+
+The best tuning parameters are found to be m = 12 and minimum node size = 2. The RMSE based on test data is `r te.rf`.
+
+
+We then plotted a variable importance plot based on permutation importance. The most important variables are found to be `expend` and `room_board`. `accept`, `apps`, `grad_rate`, and `perc_alumni` are relatively important. 
+```{r, dpi = 300}
+set.seed(2022)
+rf.per <- ranger(outstate ~ . ,
+                 College_train,
+                 mtry = rf.fit$bestTune[[1]],
+                 splitrule = "variance",
+                 min.node.size = rf.fit$bestTune[[3]],
+                 importance = "permutation",
+                 scale.permutation.importance = TRUE) 
+
+barplot(sort(ranger::importance(rf.per), decreasing = FALSE), 
+        las = 2, horiz = TRUE, cex.names = 0.6,
+        col = colorRampPalette(colors = c("cyan","blue"))(16))
+```
+
+
+### c. Boosting
+
+```{r, dpi = 300}
+gbm.grid <- expand.grid(n.trees = c(1000,2000,3000,4000,5000),
+                        interaction.depth = 1:5,
+                        shrinkage = c(0.001,0.003,0.005),
+                        n.minobsinnode = c(1,10))
+
+set.seed(8106)
+gbm.fit <- train(outstate ~ . ,
+                 College_train, 
+                 method = "gbm",
+                 tuneGrid = gbm.grid,
+                 trControl = ctrl,
+                 verbose = FALSE)
+
+gbm.fit$bestTune
+ggplot(gbm.fit, highlight = TRUE)
+
+pred.bst <- predict(gbm.fit, newdata = College_test)
+te.bst <- RMSE(pred.bst, College_test$outstate)
+te.bst
+```
+
+The best tuning parameters of boosting are number of trees = 2000, number of splits = 5, shrinkage = 0.003, and minimum node size = 10. The RMSE based on test data is `r te.bst`.
+
+The variable importance plot shows that `expend`, `room_board`, `grad_rate`, and `apps` are important variables, which are similar to the results of random forest. 
+```{r, dpi = 300}
+summary(gbm.fit$finalModel, las = 2, cBars = 16, cex.names = 0.6)
+```
+
+## Problem 2
+
+```{r}
+data(OJ)
+oj <- OJ %>% 
+  janitor::clean_names() %>% 
+  na.omit()
+
+set.seed(8106)
+trainRows2 <- createDataPartition(y = oj$purchase, p = 0.653, list = FALSE)
+oj_train <- oj[trainRows2, ]
+oj_test <- oj[-trainRows2, ]
+```
+
+### a. Classification Tree
+```{r, dpi = 300}
+ctrl1 <- trainControl(method = "cv",
+                      classProbs = TRUE, 
+                      summaryFunction = twoClassSummary)
+
+set.seed(8106)
+c.tree <- train(purchase ~ . ,
+                oj_train,
+                method = "rpart",
+                tuneGrid = data.frame(cp = exp(seq(-6, -3, len = 50))),
+                trControl = ctrl1,
+                metric = "ROC")
+
+ggplot(c.tree, highlight = TRUE)
+c.tree$bestTune
+rpart.plot(c.tree$finalModel)
+```
+
+The best cp is found to be `r c.tree$bestTune`. The tree with highest AUC has 13 terminal nodes. However, the tree obtained using 1SE rule has 8 terminal nodes, which is a much smaller tree. 
+
+```{r, dpi = 300}
+#1SE rule
+set.seed(8106)
+c.tree1 <- rpart(formula = purchase ~ . , 
+                 data = oj_train,
+                 control = rpart.control(cp = 0))
+
+cpTable <- c.tree1$cptable
+minErr <- which.min(cpTable[,4])
+
+c.tree2 <- prune(c.tree1, cp = cpTable[cpTable[,4] < cpTable[minErr,4] + cpTable[minErr,5],1][1])
+rpart.plot(c.tree2)
+```
+
+### b. AdaBoost
+```{r, dpi = 300}
+ctrl1 <- trainControl(method = "cv",
+                      classProbs = TRUE, 
+                      summaryFunction = twoClassSummary)
+
+gbmA.grid <- expand.grid(n.trees = c(1000,2000,3000,4000,5000),
+                         interaction.depth = 1:6,
+                         shrinkage = c(0.0005,0.001,0.002),
+                         n.minobsinnode = 1)
+set.seed(8106)
+gbmA.fit <- train(purchase ~ . , 
+                  oj_train, 
+                  tuneGrid = gbmA.grid,
+                  trControl = ctrl1,
+                  method = "gbm",
+                  distribution = "adaboost",
+                  metric = "ROC",
+                  verbose = FALSE)
+
+gbmA.fit$bestTune
+ggplot(gbmA.fit, highlight = TRUE)
+
+gbmA.pred.class <- predict(gbmA.fit, newdata = oj_test)
+confusionMatrix(gbmA.pred.class, oj_test$purchase)
+```
+
+The best tuning parameters of Adaboost are number of trees = 3000, number of splits = 6, shrinkage = 0.001, and minimum node size = 1. According to the confusion matrix, the prediction accuracy on test data is 0.8162, thus the test error rate is 0.1838.
+
+The variable importance plot shows that `loyal_ch`, `price_diff`, and `weekof_purchase` are important variables in the Adaboost method. 
+```{r, dpi = 300}
+summary(gbmA.fit$finalModel, las = 1.5, cBars = 17, cex.names = 0.45)
+```
+
