@@ -1,7 +1,7 @@
 ---
-title: "P8106 HW4"
+title: "P8106 HW5"
 author: "Lin Yang"
-output: pdf_document
+output: github_document
 --- 
 
   
@@ -12,194 +12,88 @@ knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 ```{r, echo = T, message = FALSE, results='hide', warning=FALSE}
 library(tidyverse)
 library(caret)
-library(rpart)
-library(rpart.plot)
-library(randomForest)
-library(ranger)
-library(gbm)
-library(ISLR)
+library(e1071)
+library(kernlab)
 ```
 
-## Problem 1
+## Problem 11
 
 ```{r}
-College <- read.csv("data/College.csv") %>% 
+auto <- read.csv("data/auto.csv") %>% 
   janitor::clean_names() %>% 
-  select(-1)
+  na.omit() %>% 
+  mutate(origin = as.factor(origin),
+         mpg_cat = factor(mpg_cat, levels = c("low", "high")))
+str(auto)
 
 set.seed(2022)
-trainRows <- createDataPartition(y = College$outstate, p = 0.8, list = FALSE)
-College_train <- College[trainRows, ]
-College_test <- College[-trainRows, ]
+trainRows <- createDataPartition(y = auto$mpg_cat, p = 0.7, list = FALSE)
+auto_train <- auto[trainRows, ]
+auto_test <- auto[-trainRows, ]
 ```
 
-### a. Regression Tree
+### (a) Support Vector Classifier (linear kernel)
 
-```{r, dpi = 300}
-ctrl <- trainControl(method = "cv")
+```{r, dpi=300}
 set.seed(2022)
-r.tree <- train(outstate ~ . ,
-                College_train,
-                method = "rpart",
-                tuneGrid = data.frame(cp = exp(seq(-6,-4, length = 50))),
-                trControl = ctrl)
-r.tree$bestTune
-ggplot(r.tree, highlight = TRUE)
-rpart.plot(r.tree$finalModel)
-```
-The best cp is selected to be `r r.tree$bestTune`. The root node is `expend` less than 11000 or not. There are 17 terminal nodes, thus this is a large tree.
-
-### b. Random Forest
-
-```{r, dpi = 300}
-rf.grid <- expand.grid(mtry = 1:16,
-                       splitrule = "variance",
-                       min.node.size = 1:6)
-set.seed(2022)
-rf.fit <- train(outstate ~ . ,
-                College_train, 
-                method = "ranger",
-                tuneGrid = rf.grid,
-                trControl = ctrl)
-rf.fit$bestTune
-ggplot(rf.fit, highlight = TRUE)
-
-pred.rf <- predict(rf.fit, newdata = College_test)
-te.rf <- RMSE(pred.rf, College_test$outstate)
-te.rf
+linear.tune <- tune.svm(mpg_cat ~ . , 
+                        data = auto_train, 
+                        kernel = "linear", 
+                        cost = exp(seq(-6, -1, len = 50)),
+                        scale = TRUE)
+plot(linear.tune)
+best.linear <- linear.tune$best.model
+summary(best.linear)
 ```
 
-The best tuning parameters are found to be m = 12 and minimum node size = 2. The RMSE based on test data is `r te.rf`.
-
-
-We then plotted a variable importance plot based on permutation importance. The most important variables are found to be `expend` and `room_board`. `accept`, `apps`, `grad_rate`, and `perc_alumni` are relatively important. 
-```{r, dpi = 300}
-set.seed(2022)
-rf.per <- ranger(outstate ~ . ,
-                 College_train,
-                 mtry = rf.fit$bestTune[[1]],
-                 splitrule = "variance",
-                 min.node.size = rf.fit$bestTune[[3]],
-                 importance = "permutation",
-                 scale.permutation.importance = TRUE) 
-
-barplot(sort(ranger::importance(rf.per), decreasing = FALSE), 
-        las = 2, horiz = TRUE, cex.names = 0.6,
-        col = colorRampPalette(colors = c("cyan","blue"))(16))
-```
-
-
-### c. Boosting
-
-```{r, dpi = 300}
-gbm.grid <- expand.grid(n.trees = c(1000,2000,3000,4000,5000),
-                        interaction.depth = 1:5,
-                        shrinkage = c(0.001,0.003,0.005),
-                        n.minobsinnode = c(1,10))
-
-set.seed(8106)
-gbm.fit <- train(outstate ~ . ,
-                 College_train, 
-                 method = "gbm",
-                 tuneGrid = gbm.grid,
-                 trControl = ctrl,
-                 verbose = FALSE)
-
-gbm.fit$bestTune
-ggplot(gbm.fit, highlight = TRUE)
-
-pred.bst <- predict(gbm.fit, newdata = College_test)
-te.bst <- RMSE(pred.bst, College_test$outstate)
-te.bst
-```
-
-The best tuning parameters of boosting are number of trees = 2000, number of splits = 5, shrinkage = 0.003, and minimum node size = 10. The RMSE based on test data is `r te.bst`.
-
-The variable importance plot shows that `expend`, `room_board`, `grad_rate`, and `apps` are important variables, which are similar to the results of random forest. 
-```{r, dpi = 300}
-summary(gbm.fit$finalModel, las = 2, cBars = 16, cex.names = 0.6)
-```
-
-## Problem 2
+Through 10-fold CV, the best tuning parameter (cost) of the support vector classifier is selected to be 0.019. There are 107 support vectors in the optimal support vector classifier with a linear kernel (53 from the low gas mileage level, 54 from the high mileage level). The training and test error rates are found to be 7.61% (1-0.9239 ) and 9.48% (1-0.9052). 
 
 ```{r}
-data(OJ)
-oj <- OJ %>% 
-  janitor::clean_names() %>% 
-  na.omit()
+#train error
+pred.linear.train <- predict(best.linear, newdata = auto_train)
+confusionMatrix(data = pred.linear.train, 
+                reference = auto_train$mpg_cat,
+                positive = "high")
 
-set.seed(8106)
-trainRows2 <- createDataPartition(y = oj$purchase, p = 0.653, list = FALSE)
-oj_train <- oj[trainRows2, ]
-oj_test <- oj[-trainRows2, ]
+#test error
+pred.linear.test <- predict(best.linear, newdata = auto_test)
+confusionMatrix(data = pred.linear.test, 
+                reference = auto_test$mpg_cat,
+                positive = "high")
 ```
 
-### a. Classification Tree
-```{r, dpi = 300}
-ctrl1 <- trainControl(method = "cv",
-                      classProbs = TRUE, 
-                      summaryFunction = twoClassSummary)
+### (b) Support Vector Machine (radial kernel)
 
-set.seed(8106)
-c.tree <- train(purchase ~ . ,
-                oj_train,
-                method = "rpart",
-                tuneGrid = data.frame(cp = exp(seq(-6, -3, len = 50))),
-                trControl = ctrl1,
-                metric = "ROC")
+```{r, dpi=300}
+set.seed(2022)
+radial.tune <- tune.svm(mpg_cat ~ . , 
+                        data = auto_train, 
+                        kernel = "radial", 
+                        cost = exp(seq(-1, 5, len = 50)),
+                        gamma = exp(seq(-5, -3, len = 20)))
 
-ggplot(c.tree, highlight = TRUE)
-c.tree$bestTune
-rpart.plot(c.tree$finalModel)
+plot(radial.tune, transform.y = log, transform.x = log, 
+     color.palette = terrain.colors)
+
+best.radial <- radial.tune$best.model
+summary(best.radial)
+radial.tune$best.parameters
 ```
 
-The best cp is found to be `r c.tree$bestTune`. The tree with highest AUC has 13 terminal nodes. However, the tree obtained using 1SE rule has 8 terminal nodes, which is a much smaller tree. 
+Through 10-fold CV, the best tuning parameters (cost and gamma) of the support vector machine are selected to be 0.0174 and 34.14. There are 59 support vectors in the optimal support vector machine with a radial kernel (29 from the low gas mileage level, 30 from the high mileage level). The training and test error rates are found to be 6.16% (1-0.9384) and 9.48% (1-0.9052). The optimal support vector machine performs slightly better than the optimal support vector classifier in terms of the train errors. However, they have the same test error rates. 
 
-```{r, dpi = 300}
-#1SE rule
-set.seed(8106)
-c.tree1 <- rpart(formula = purchase ~ . , 
-                 data = oj_train,
-                 control = rpart.control(cp = 0))
+```{r}
+#train error
+pred.radial.train <- predict(best.radial, newdata = auto_train)
+confusionMatrix(data = pred.radial.train, 
+                reference = auto_train$mpg_cat,
+                positive = "high")
 
-cpTable <- c.tree1$cptable
-minErr <- which.min(cpTable[,4])
-
-c.tree2 <- prune(c.tree1, cp = cpTable[cpTable[,4] < cpTable[minErr,4] + cpTable[minErr,5],1][1])
-rpart.plot(c.tree2)
+#test error
+pred.radial.test <- predict(best.radial, newdata = auto_test)
+confusionMatrix(data = pred.radial.test, 
+                reference = auto_test$mpg_cat,
+                positive = "high")
 ```
 
-### b. AdaBoost
-```{r, dpi = 300}
-ctrl1 <- trainControl(method = "cv",
-                      classProbs = TRUE, 
-                      summaryFunction = twoClassSummary)
-
-gbmA.grid <- expand.grid(n.trees = c(1000,2000,3000,4000,5000),
-                         interaction.depth = 1:6,
-                         shrinkage = c(0.0005,0.001,0.002),
-                         n.minobsinnode = 1)
-set.seed(8106)
-gbmA.fit <- train(purchase ~ . , 
-                  oj_train, 
-                  tuneGrid = gbmA.grid,
-                  trControl = ctrl1,
-                  method = "gbm",
-                  distribution = "adaboost",
-                  metric = "ROC",
-                  verbose = FALSE)
-
-gbmA.fit$bestTune
-ggplot(gbmA.fit, highlight = TRUE)
-
-gbmA.pred.class <- predict(gbmA.fit, newdata = oj_test)
-confusionMatrix(gbmA.pred.class, oj_test$purchase)
-```
-
-The best tuning parameters of Adaboost are number of trees = 3000, number of splits = 6, shrinkage = 0.001, and minimum node size = 1. According to the confusion matrix, the prediction accuracy on test data is 0.8162, thus the test error rate is 0.1838.
-
-The variable importance plot shows that `loyal_ch`, `price_diff`, and `weekof_purchase` are important variables in the Adaboost method. 
-```{r, dpi = 300}
-summary(gbmA.fit$finalModel, las = 1.5, cBars = 17, cex.names = 0.45)
-```
 
